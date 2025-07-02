@@ -22,4 +22,37 @@ I primarily used **PowerSIEM** to quickly find Indicators of Compromise (IOCs) f
 - A Good Sysmon Config - I highly recommend Florian Roth's ([here](https://github.com/bakedmuffinman/Neo23x0-sysmon-config)) as he is the GOAT of detection logic
 ---
 
+### 2. OpenScanner
+
+**OpenScanner** is a Python-based OSINT tool for scanning and analysing domains, IP addresses, and URLs. It automates reputation checks, DNS resolution, WHOIS lookups, passive intelligence gathering, and safe payload interaction.
+
+#### Features
+- Separates logic for domains and IPs
+- IP & domain enrichment using:
+  - **AbuseIPDB**
+  - **GreyNoise**
+  - **VirusTotal**
+  - **Shodan**
+  - **Censys**
+  - **URLScan.io**
+  - **crt.sh**
+  - **SecurityTrails**
+  - **IPVoid**
+  - **WHOIS**
+- Identifies:
+  - Domain age & suspicious WHOIS patterns
+  - Cloud-hosted or anonymised infra
+  - VPN/proxy/TOR tags
+  - Redirect chains and short URL destinations
+- Command-line flags for `--verbose` and `--expand` modes
+
+#### Prerequisites
+- API keys for each service (**VirusTotal** and **Shodan** require **paid** accounts)
+- Python 3.10+
+- Install dependencies:
+  ```bash
+  pip install -r requirements.txt
+  ```
+---
+
 More tools will be added soon to this repository.
