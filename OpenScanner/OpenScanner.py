@@ -1,13 +1,14 @@
 import requests
 import socket
-from datetime import datetime
 import whois
 import json
 import re
 import argparse
 import ipaddress
 import dns.resolver
-from urllib.parse import quote_plus
+import base64
+from datetime import datetime
+from urllib.parse import quote_plus, urlparse
 
 # Replace with your actual API keys or leave as None
 ABUSEIPDB_API_KEY = None  # https://www.abuseipdb.com/register
@@ -21,7 +22,10 @@ SECURITYTRAILS_API_KEY = None
 ABUSECH_AUTH_KEY= None    #https://auth.abuse.ch/
 
 
-# ==== Tools ====
+# ==== Target Checks ====
+def refang(s):
+    return s.replace("[.]", ".").replace("[:]", ":")
+
 def is_ip(target):
     return bool(re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", target))
 
@@ -43,6 +47,14 @@ def get_dns_records(domain):
                 print(f" - {rdata.to_text()}")
         except Exception:
             pass
+
+def reverse_dns_lookup(ip):
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except Exception:
+        return None
+    
+# ======= Tool Checks =======
 
 def check_abuseipdb(ip, verbose=False):
     if not ABUSEIPDB_API_KEY:
@@ -123,26 +135,48 @@ def check_virustotal(query, verbose=False):
     if not VT_API_KEY:
         print(f"[VirusTotal] API key not set. Check manually: https://www.virustotal.com/gui/search/{quote_plus(query)}")
         return
+
+    headers = {"x-apikey": VT_API_KEY}
+    
     try:
-        headers = {"x-apikey": VT_API_KEY}
-        url = f"https://www.virustotal.com/api/v3/search?query={quote_plus(query)}"
+        if query.startswith("http://") or query.startswith("https://"):
+            # For full URLs, VT uses a base64url-encoded format
+            vt_id = base64.urlsafe_b64encode(query.encode()).decode().strip("=")
+            url = f"https://www.virustotal.com/api/v3/urls/{vt_id}"
+        else:
+            # IP or domain lookup
+            url = f"https://www.virustotal.com/api/v3/search?query={quote_plus(query)}"
+        
         response = requests.get(url, headers=headers)
         data = response.json()
 
         if verbose:
             print(json.dumps(data, indent=2))
+            return
+
+        if query.startswith("http"):
+            # For full URLs
+            stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
         else:
-            try:
-                stats = data["data"][0]["attributes"]["last_analysis_stats"]
-                harmless = stats.get("harmless", 0)
-                malicious = stats.get("malicious", 0)
-                suspicious = stats.get("suspicious", 0)
-                print(f"- Harmless: {harmless}")
-                print(f"- Malicious: {malicious}")
-                print(f"- Suspicious: {suspicious}")
-            except:
-                print("- No analysis data found.")
+            # For search-based
+            stats = data.get("data", [{}])[0].get("attributes", {}).get("last_analysis_stats", {})
+
+        harmless = stats.get("harmless", 0)
+        malicious = stats.get("malicious", 0)
+        suspicious = stats.get("suspicious", 0)
+
+        if not stats:
+            print("- No analysis data found.")
+        else:
+            print(f"- Harmless: {harmless}")
+            print(f"- Malicious: {malicious}")
+            print(f"- Suspicious: {suspicious}")
+
+        if query.startswith("http"):
+            print(f"- Link: https://www.virustotal.com/gui/url/{vt_id}")
+        else:
             print(f"- Link: https://www.virustotal.com/gui/search/{quote_plus(query)}")
+
     except Exception as e:
         print(f"[VirusTotal] Error: {e}")
 
@@ -377,24 +411,44 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose JSON output")
     parser.add_argument("--expand", "-e", action="store_true", help="Enable active URL expansion, warning this will send a Python web request to a website to check for redirects. Only enable this if running in a sandboxed environment.")
 
-    print("start")
-
     args = parser.parse_args()
 
     target = args.target
     verbose = args.verbose
+
+    target = refang(target)
     
     # Determine if it's a domain or IP
 
-    if is_ip(target):
-        ip = target
-        is_domain_target = False
-    elif is_domain(target):
-        ip = resolve_domain_to_ip(target)
-        is_domain_target = True
+    # ==== Input Normalisation and Scanning Logic ====
+    parsed = urlparse(target)
+    is_domain_target = False
+    resolved_domain = None  # Used if we resolve PTR from IP
+    full_url = None
+
+    if parsed.scheme in ["http", "https"]:
+        # Full URL input
+        full_url = target
+        hostname = parsed.hostname
+        if hostname and (is_ip(hostname) or is_domain(hostname)):
+            ip = hostname if is_ip(hostname) else resolve_domain_to_ip(hostname)
+            is_domain_target = not is_ip(hostname)
+        else:
+            print("❌ Invalid hostname in URL. Exiting.")
+            return
     else:
-        print("❌ Target is neither a valid IP nor domain. Exiting.")
-        return
+        # Raw domain or IP input
+        hostname = target
+        if is_ip(hostname):
+            ip = hostname
+            # Attempt reverse DNS only for raw IP input
+            resolved_domain = reverse_dns_lookup(ip)
+        elif is_domain(hostname):
+            ip = resolve_domain_to_ip(hostname)
+            is_domain_target = True
+        else:
+            print("❌ Target is neither a valid IP nor domain. Exiting.")
+            return
 
     if not ip:
         print("❌ Could not resolve IP. Exiting.")
@@ -405,7 +459,11 @@ def main():
         return
 
     print(f"\n🔍 Investigating: {target}")
-    print(f"Resolved IP: {ip}\n")
+    print(f"Resolved Hostname: {hostname}")
+    print(f"Resolved IP: {ip}")
+    if resolved_domain:
+        print(f"PTR Resolved Domain: {resolved_domain}")
+    print("")
 
     # ========== IP Section ==========
     print("=== IP Analysis ===")
@@ -427,40 +485,63 @@ def main():
     print("\n[IPVoid]")
     check_ipvoid(ip, verbose)
 
-    # ========== Domain Section ==========
-    if is_domain_target:
-        print("\n=== Domain Analysis ===")
-        
-        print("[VirusTotal]")
-        check_virustotal(target, verbose)
+# ========== Domain/URL Intelligence Section ==========
+    print("\n=== Domain/URL Intelligence ===")
 
-        print("\n[WHOIS]")
-        get_whois(target, verbose)
+    # Pick best available domain target for tools
+    domain_target = resolved_domain or hostname
 
-        print("\n[crt.sh]")
-        check_crtsh(target, verbose)
+    # --- VirusTotal works with domain, IP, or full URL
+    print("[VirusTotal]")
+    check_virustotal(full_url or domain_target, verbose)
 
-        print("\n[Hunting.abuse.ch]")
-        query_urlhaus(target, verbose)
+    # --- WHOIS only works for domains
+    print("\n[WHOIS]")
+    if is_domain(domain_target):
+        get_whois(domain_target, verbose)
+    else:
+        print("- Skipped (WHOIS only applies to domains)")
 
-        print("\n[SecurityTrails]")
-        check_securitytrails(target, verbose)
+    # --- crt.sh only for real domains
+    print("\n[crt.sh]")
+    if is_domain(domain_target):
+        check_crtsh(domain_target, verbose)
+    else:
+        print("- Skipped (certificates not tracked for raw IPs)")
 
-        print("\n[URLScan.io]")
-        check_urlscan(target, verbose)
+    # --- URLHaus supports domain or IP
+    print("\n[Hunting.abuse.ch]")
+    query_urlhaus(domain_target, verbose)
 
-        print("\n[DNS Records]")
-        get_dns_records(target)
+    # --- SecurityTrails only supports domains
+    print("\n[SecurityTrails]")
+    if is_domain(domain_target):
+        check_securitytrails(domain_target, verbose)
+    else:
+        print("- Skipped (only for domains)")
 
-        print("\n[Browserling]")
-        check_browserling(target, verbose)
+    # --- URLScan works with domain or IP hostname
+    print("\n[URLScan.io]")
+    check_urlscan(domain_target, verbose)
 
-        if target.startswith("http://") or target.startswith("https://"):
-            print("\n[ExpandURL]")
-            if args.expand:
-                check_expandurl(target, verbose)
-            else:
-                safe_expandurl(target, verbose)
+    # --- DNS only works with domains
+    print("\n[DNS Records]")
+    if is_domain(domain_target):
+        get_dns_records(domain_target)
+    else:
+        print("- Skipped (no DNS records for IPs)")
+
+    # --- Browserling can open domains or IPs
+    print("\n[Browserling]")
+    check_browserling(domain_target, verbose)
+
+    # --- Expand URL if full_url was given
+    if full_url:
+        print("\n[ExpandURL]")
+        if args.expand:
+            check_expandurl(full_url, verbose)
+        else:
+            safe_expandurl(full_url, verbose)
 
 if __name__ == "__main__":
     main()
