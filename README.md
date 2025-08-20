@@ -22,9 +22,9 @@ I primarily used **PowerSIEM** to quickly find Indicators of Compromise (IOCs) f
 - A Good Sysmon Config - I highly recommend Florian Roth's ([here](https://github.com/bakedmuffinman/Neo23x0-sysmon-config)) as he is the GOAT of detection logic
 ---
 
-### 2. OpenScanner
+### 2. NetTriage
 
-**OpenScanner** is a Python-based OSINT tool for scanning and analysing domains, IP addresses, and URLs. It automates reputation checks, DNS resolution, WHOIS lookups, passive intelligence gathering, and safe payload interaction.
+**NetTriage** is a Python-based OSINT tool for scanning and analysing domains, IP addresses, and URLs. It automates reputation checks, DNS resolution, WHOIS lookups, passive intelligence gathering, and safe payload interaction.
 
 #### Features
 - Separates logic for domains and IPs
